@@ -1,0 +1,112 @@
+#!/usr/bin/env ruby
+require "date"
+require "ipaddr"
+require "json"
+require "net/http"
+
+class RangesRefresh
+  class Refused < StandardError; end
+
+  API = URI("https://api.cloudflare.com/client/v4/ips")
+  FAMILIES = { "ipv4" => "data/ips-v4.txt", "ipv6" => "data/ips-v6.txt" }.freeze
+  VERSION_FILE = "lib/cloudflare_visitor_ip/version.rb"
+  VERSION = /VERSION = "(\d+)\.(\d+)\.(\d+)"/
+
+  def initialize(root:, today: Date.today)
+    @root = root
+    @today = today
+  end
+
+  def fetch
+    response = Net::HTTP.get_response(API)
+    if response.is_a?(Net::HTTPSuccess)
+      response.body
+    else
+      raise Refused, "#{API} answered #{response.code}"
+    end
+  end
+
+  # Returns the new version, or nil when the published ranges match the data files.
+  def apply(body)
+    published = parse(body)
+    current = FAMILIES.transform_values { |path| read(path).lines(chomp: true) }
+    check_shrinkage(published, current)
+    if published.any? { |family, cidrs| cidrs.sort != current[family].sort }
+      release(published, current)
+    end
+  end
+
+  private
+    def parse(body)
+      json = JSON.parse(body)
+      raise Refused, "the response is not a JSON object" unless json.is_a?(Hash)
+      raise Refused, "success is #{json["success"].inspect}, not true" unless json["success"] == true
+      raise Refused, "the response has no result object" unless json["result"].is_a?(Hash)
+      FAMILIES.keys.to_h { |family| [ family, cidrs(family, json["result"]["#{family}_cidrs"]) ] }
+    rescue JSON::ParserError
+      raise Refused, "the response is not JSON"
+    end
+
+    def cidrs(family, entries)
+      raise Refused, "#{family}_cidrs is missing or empty" unless entries.is_a?(Array) && entries.any?
+      entries.each { |entry| check_cidr(family, entry) }
+    end
+
+    def check_cidr(family, entry)
+      address, prefix = entry.split("/", 2) if entry.is_a?(String)
+      raise Refused, "#{entry.inspect} in #{family}_cidrs is not a CIDR" unless prefix&.match?(/\A\d+\z/)
+      range = IPAddr.new(entry)
+      raise Refused, "#{entry} in #{family}_cidrs is not #{family}" unless range.public_send("#{family}?")
+      raise Refused, "#{entry} in #{family}_cidrs has host bits set" unless range == IPAddr.new(address)
+    rescue IPAddr::Error
+      raise Refused, "#{entry.inspect} in #{family}_cidrs is not a CIDR"
+    end
+
+    def check_shrinkage(published, current)
+      published.each do |family, cidrs|
+        if cidrs.size * 2 < current[family].size
+          raise Refused, "#{family}_cidrs has #{cidrs.size} ranges, fewer than half the #{current[family].size} in #{FAMILIES[family]}"
+        end
+      end
+    end
+
+    def release(published, current)
+      version = next_version
+      version_file = read(VERSION_FILE).sub(VERSION, %(VERSION = "#{version}"))
+      changelog = read("CHANGELOG.md").sub(/^## /) { changelog_entry(version, published, current) + "## " }
+
+      published.each { |family, cidrs| write(FAMILIES[family], cidrs.join("\n") + "\n") }
+      write(VERSION_FILE, version_file)
+      write("CHANGELOG.md", changelog)
+      version
+    end
+
+    def next_version
+      major, minor, patch = read(VERSION_FILE).match(VERSION).captures.map(&:to_i)
+      "#{major}.#{minor}.#{patch + 1}"
+    end
+
+    def changelog_entry(version, published, current)
+      added = published.values.flatten - current.values.flatten
+      removed = current.values.flatten - published.values.flatten
+      changes = added.map { |cidr| "- Adds `#{cidr}`." } + removed.map { |cidr| "- Removes `#{cidr}`." }
+
+      "## #{version} (#{@today.iso8601})\n\nCloudflare changed its published IP ranges.\n\n#{changes.join("\n")}\n\n"
+    end
+
+    def read(path) = File.read(File.join(@root, path))
+    def write(path, content) = File.write(File.join(@root, path), content)
+end
+
+if $PROGRAM_NAME == __FILE__
+  refresh = RangesRefresh.new(root: File.expand_path("..", __dir__))
+  begin
+    if version = refresh.apply(refresh.fetch)
+      puts "Cloudflare's ranges changed. Wrote data/, bumped the version to #{version} and added a CHANGELOG entry."
+    else
+      puts "Cloudflare's ranges match data/. Nothing to write."
+    end
+  rescue RangesRefresh::Refused => error
+    abort "Refused, nothing written: #{error.message}"
+  end
+end

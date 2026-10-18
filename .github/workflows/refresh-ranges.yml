@@ -1,0 +1,33 @@
+name: Refresh ranges
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+      - run: script/refresh-ranges
+      - id: version
+        run: echo "version=$(sed -n 's/.*VERSION = "\(.*\)"/\1/p' lib/cloudflare_visitor_ip/version.rb)" >> "$GITHUB_OUTPUT"
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.RANGES_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: refresh-ranges
+          delete-branch: true
+          commit-message: Refresh Cloudflare's IP ranges for v${{ steps.version.outputs.version }}
+          title: Refresh Cloudflare's IP ranges for v${{ steps.version.outputs.version }}
+          body: |
+            `script/refresh-ranges` found that https://api.cloudflare.com/client/v4/ips no longer matches `data/`. This PR rewrites the data files, bumps the version to ${{ steps.version.outputs.version }}, and adds a CHANGELOG entry that lists each range added or removed.
+
+            After merge, the Release workflow tags `v${{ steps.version.outputs.version }}` once CI passes on main. Each app picks up the tag through Dependabot. Re-sync each server's firewall when the app deploys.
