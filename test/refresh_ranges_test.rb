@@ -97,6 +97,10 @@ class RefreshRangesTest < ActiveSupport::TestCase
       "IPv4-mapped" => published { |result| result["ipv6_cidrs"] << "::ffff:0:0/96" },
       "IPv6 link-local" => published { |result| result["ipv6_cidrs"] << "fe80::/20" },
       "IPv6 unique local" => published { |result| result["ipv6_cidrs"] << "fd00::/20" },
+      "IPv4 shared address space" => published { |result| result["ipv4_cidrs"] << "100.64.0.0/12" },
+      "IPv4 benchmarking" => published { |result| result["ipv4_cidrs"] << "198.18.0.0/15" },
+      "IPv4 multicast" => published { |result| result["ipv4_cidrs"] << "224.0.0.0/12" },
+      "IPv4 reserved" => published { |result| result["ipv4_cidrs"] << "240.0.0.0/12" },
       "IPv4 shrinks below half" => published { |result| result["ipv4_cidrs"] = result["ipv4_cidrs"].first(7) },
       "IPv6 shrinks below half" => published { |result| result["ipv6_cidrs"] = result["ipv6_cidrs"].first(3) }
     }
