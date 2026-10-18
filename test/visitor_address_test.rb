@@ -78,6 +78,15 @@ class VisitorAddressTest < ActiveSupport::TestCase
     assert_equal "2606:4700::/48", visits.sole["remote_network"]
   end
 
+  test "an app initializer can place its own middleware after the gem's" do
+    visits = visit_app_with_initializer(<<~RUBY, from: CLOUDFLARE_EDGE, connecting_ips: [ VISITOR ])
+      Probe = Class.new { def initialize(app) = @app = app; def call(env) = @app.call(env) }
+      Rails.application.config.middleware.insert_after CloudflareVisitorIp::Middleware, Probe
+    RUBY
+
+    assert_equal VISITOR, visits.sole["remote_ip"]
+  end
+
   test "an app that sets CloudflareVisitorIp.ipv6_prefix in config/initializers keeps that prefix" do
     visits = visit_app_with_initializer("CloudflareVisitorIp.ipv6_prefix = 48", from: CLOUDFLARE_EDGE_V6, connecting_ips: [ VISITOR_V6 ])
 
