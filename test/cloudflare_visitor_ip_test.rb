@@ -26,6 +26,18 @@ class CloudflareVisitorIpTest < ActiveSupport::TestCase
     end
   end
 
+  test "ipv6_prefix is 64 unless set" do
+    assert_equal 64, CloudflareVisitorIp.ipv6_prefix
+  end
+
+  test "an ipv6_prefix outside 1 to 128 is refused and the prefix keeps its value" do
+    [ 0, 129, "56", 56.0, nil ].each do |prefix|
+      error = assert_raises(ArgumentError, prefix.inspect) { CloudflareVisitorIp.ipv6_prefix = prefix }
+      assert_includes error.message, "CloudflareVisitorIp.ipv6_prefix"
+    end
+    assert_equal 64, CloudflareVisitorIp.ipv6_prefix
+  end
+
   private
     def data_file(name) = File.expand_path("../data/#{name}", __dir__)
 end

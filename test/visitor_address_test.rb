@@ -2,18 +2,11 @@ require "test_helper"
 require "fixtures/rails_app"
 require "open3"
 
-RailsApp.initialize!
-RailsApp.routes.draw { root "visitors#show" }
+RailsApp.boot
 
-# Production hops: visitor -> Cloudflare -> kamal-proxy -> Thruster -> Puma.
-# kamal-proxy terminates TLS, drops the client's X-Forwarded-For and writes the
-# peer that connected to it. Thruster appends kamal-proxy and connects to Puma
-# over loopback. CF-Connecting-IP, which Cloudflare sets to the visitor, passes
-# through both.
 class VisitorAddressTest < ActiveSupport::TestCase
   CLOUDFLARE_EDGE = "172.71.10.20"
   CLOUDFLARE_EDGE_V6 = "2606:4700::10"
-  KAMAL_PROXY = "172.18.0.2"
   OUTSIDER = "198.51.100.20"
   VISITOR = "203.0.113.7"
   VISITOR_V6 = "2001:db8::7"
@@ -35,7 +28,36 @@ class VisitorAddressTest < ActiveSupport::TestCase
 
   test "a peer outside Cloudflare cannot choose its address with CF-Connecting-IP" do
     assert_equal OUTSIDER, remote_ip(from: OUTSIDER, connecting_ip: VISITOR)
-    assert_equal KAMAL_PROXY, remote_ip(from: KAMAL_PROXY, connecting_ip: VISITOR)
+    assert_equal RailsApp::KAMAL_PROXY, remote_ip(from: RailsApp::KAMAL_PROXY, connecting_ip: VISITOR)
+  end
+
+  test "remote_network is an IPv4 visitor's own address as a /32" do
+    assert_equal "#{VISITOR}/32", RailsApp.visit(from: CLOUDFLARE_EDGE, connecting_ip: VISITOR)["remote_network"]
+  end
+
+  test "remote_network is an IPv6 visitor's /64 by default, so rotating within it keeps one network" do
+    networks = [ VISITOR_V6, "2001:db8::ffff:ffff:ffff:ffff", "2001:db8:0:1::7" ].map do |connecting_ip|
+      RailsApp.visit(from: CLOUDFLARE_EDGE_V6, connecting_ip: connecting_ip)["remote_network"]
+    end
+
+    assert_equal [ "2001:db8::/64", "2001:db8::/64", "2001:db8:0:1::/64" ], networks
+  end
+
+  test "an app that sets ipv6_prefix to 56 counts every /64 inside one /56 as one network" do
+    visits = visit_booted_app("RailsApp.config.cloudflare_visitor_ip.ipv6_prefix = 56",
+      from: CLOUDFLARE_EDGE_V6, connecting_ips: [ "2001:db8:0:1::7", "2001:db8:0:ff::7", "2001:db8:0:100::7" ])
+
+    assert_equal [ "2001:db8::/56", "2001:db8::/56", "2001:db8:0:100::/56" ], visits.map { |visit| visit["remote_network"] }
+    assert_equal "2001:db8:0:1::7", visits.first["remote_ip"]
+  end
+
+  test "an app with an ipv6_prefix outside 1 to 128 fails to boot" do
+    [ "0", "129", '"56"' ].each do |prefix|
+      _stdout, stderr, status = run_app("RailsApp.config.cloudflare_visitor_ip.ipv6_prefix = #{prefix}")
+
+      assert_not status.success?, prefix
+      assert_match(/ArgumentError.*config\.cloudflare_visitor_ip\.ipv6_prefix/, stderr, prefix)
+    end
   end
 
   test "the middleware runs after ActionDispatch::RemoteIp and before the request logger" do
@@ -55,25 +77,32 @@ class VisitorAddressTest < ActiveSupport::TestCase
   end
 
   test "an app that turns the middleware off keeps the Cloudflare edge address" do
-    stdout, stderr, status = Open3.capture3(RbConfig.ruby, "-Ilib", "-Itest", "-e", <<~RUBY)
-      require "fixtures/rails_app"
-      RailsApp.config.cloudflare_visitor_ip.middleware = false
-      RailsApp.initialize!
-      RailsApp.routes.draw { root "visitors#show" }
-      env = Rack::MockRequest.env_for("/", "REMOTE_ADDR" => "127.0.0.1", "HTTP_X_FORWARDED_FOR" => "#{CLOUDFLARE_EDGE}, #{KAMAL_PROXY}", "HTTP_CF_CONNECTING_IP" => "#{VISITOR}")
-      print RailsApp.call(env).last.join
-    RUBY
+    visits = visit_booted_app("RailsApp.config.cloudflare_visitor_ip.middleware = false", from: CLOUDFLARE_EDGE, connecting_ips: [ VISITOR ])
 
-    assert status.success?, stderr
-    assert_equal CLOUDFLARE_EDGE, JSON.parse(stdout)["remote_ip"]
+    assert_equal CLOUDFLARE_EDGE, visits.sole["remote_ip"]
   end
 
   private
     def remote_ip(from:, connecting_ip:)
-      env = Rack::MockRequest.env_for("/", "REMOTE_ADDR" => "127.0.0.1", "HTTP_X_FORWARDED_FOR" => "#{from}, #{KAMAL_PROXY}")
-      env["HTTP_CF_CONNECTING_IP"] = connecting_ip unless connecting_ip.nil?
-      status, _headers, body = RailsApp.call(env)
-      assert_equal 200, status
-      JSON.parse(body.each.to_a.join)["remote_ip"]
+      RailsApp.visit(from: from, connecting_ip: connecting_ip)["remote_ip"]
+    end
+
+    def visit_booted_app(config, from:, connecting_ips:)
+      stdout, stderr, status = run_app(config, <<~RUBY)
+        puts JSON.generate(#{connecting_ips.inspect}.map { |ip| RailsApp.visit(from: #{from.inspect}, connecting_ip: ip) })
+      RUBY
+
+      assert status.success?, stderr
+      JSON.parse(stdout)
+    end
+
+    # An app boots once per process, so each configuration gets its own.
+    def run_app(config, after_boot = "")
+      Open3.capture3(RbConfig.ruby, "-Ilib", "-Itest", "-e", <<~RUBY)
+        require "fixtures/rails_app"
+        #{config}
+        RailsApp.boot
+        #{after_boot}
+      RUBY
     end
 end
