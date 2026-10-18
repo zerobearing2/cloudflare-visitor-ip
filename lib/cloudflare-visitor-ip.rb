@@ -1,0 +1,5 @@
+require "rails"
+require "action_dispatch"
+require_relative "cloudflare_visitor_ip"
+require_relative "cloudflare_visitor_ip/middleware"
+require_relative "cloudflare_visitor_ip/railtie"
