@@ -1,7 +1,9 @@
 module CloudflareVisitorIp
   # Behind Cloudflare, remote_ip is the edge that connected to the origin. The
   # edge sets CF-Connecting-IP to the visitor and overwrites any value the client
-  # sent. From any other peer the header is the client's word.
+  # sent, except on a Worker's fetch to a host that is not on Cloudflare, where
+  # the Worker writes it. Cloudflare marks every Worker fetch with CF-Worker.
+  # From any other peer the header is the client's word.
   class Middleware
     def initialize(app)
       @app = app
@@ -17,7 +19,7 @@ module CloudflareVisitorIp
 
     private
       def visitor_behind_cloudflare(request)
-        if CloudflareVisitorIp.include?(request.remote_ip)
+        if CloudflareVisitorIp.include?(request.remote_ip) && !request.headers.key?("CF-Worker")
           single_address(request.headers["CF-Connecting-IP"])
         end
       end

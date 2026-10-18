@@ -24,10 +24,11 @@ class RailsApp < Rails::Application
   # kamal-proxy terminates TLS, drops the client's X-Forwarded-For and writes the
   # peer that connected to it. Thruster appends kamal-proxy and connects to Puma
   # over loopback. CF-Connecting-IP, which Cloudflare sets to the visitor, passes
-  # through both.
-  def self.visit(from:, connecting_ip:)
+  # through both, as does the CF-Worker header Cloudflare adds to a Worker's fetch.
+  def self.visit(from:, connecting_ip:, worker: nil)
     env = Rack::MockRequest.env_for("/", "REMOTE_ADDR" => "127.0.0.1", "HTTP_X_FORWARDED_FOR" => "#{from}, #{KAMAL_PROXY}")
     env["HTTP_CF_CONNECTING_IP"] = connecting_ip unless connecting_ip.nil?
+    env["HTTP_CF_WORKER"] = worker unless worker.nil?
     _status, _headers, body = call(env)
     JSON.parse(body.each.to_a.join)
   end

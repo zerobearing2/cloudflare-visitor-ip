@@ -31,6 +31,10 @@ class VisitorAddressTest < ActiveSupport::TestCase
     assert_equal RailsApp::KAMAL_PROXY, remote_ip(from: RailsApp::KAMAL_PROXY, connecting_ip: VISITOR)
   end
 
+  test "a Worker's fetch is known by its Cloudflare edge, whatever CF-Connecting-IP the Worker set" do
+    assert_equal CLOUDFLARE_EDGE, remote_ip(from: CLOUDFLARE_EDGE, connecting_ip: VISITOR, worker: "attacker.example")
+  end
+
   test "remote_network is an IPv4 visitor's own address as a /32" do
     assert_equal "#{VISITOR}/32", RailsApp.visit(from: CLOUDFLARE_EDGE, connecting_ip: VISITOR)["remote_network"]
   end
@@ -83,8 +87,8 @@ class VisitorAddressTest < ActiveSupport::TestCase
   end
 
   private
-    def remote_ip(from:, connecting_ip:)
-      RailsApp.visit(from: from, connecting_ip: connecting_ip)["remote_ip"]
+    def remote_ip(from:, connecting_ip:, worker: nil)
+      RailsApp.visit(from: from, connecting_ip: connecting_ip, worker: worker)["remote_ip"]
     end
 
     def visit_booted_app(config, from:, connecting_ips:)

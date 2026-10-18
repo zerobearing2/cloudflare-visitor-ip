@@ -19,12 +19,15 @@ Run `bundle install`. Bundler requires the gem for you, and the gem's Railtie ad
 
 ## How the gem finds the visitor
 
-`CloudflareVisitorIp::Middleware` runs after `ActionDispatch::RemoteIp` and before `Rails::Rack::Logger`. It reads the address that `RemoteIp` found, called the peer below, and sets `request.remote_ip` to the `CF-Connecting-IP` header when both of these are true:
+`CloudflareVisitorIp::Middleware` runs after `ActionDispatch::RemoteIp` and before `Rails::Rack::Logger`. It reads the address that `RemoteIp` found, called the peer below, and sets `request.remote_ip` to the `CF-Connecting-IP` header when all of these are true:
 
 - The peer is inside one of Cloudflare's ranges in `data/ips-v4.txt` or `data/ips-v6.txt`.
+- The request has no `CF-Worker` header.
 - The header names exactly one address. A /32 or /128 counts as one address.
 
-In every other case `request.remote_ip` stays the peer. A request from outside Cloudflare can send any `CF-Connecting-IP` it likes, and the gem ignores it. A Cloudflare edge always overwrites the header with the address that connected to it, so a client cannot choose the value that arrives from an edge.
+In every other case `request.remote_ip` stays the peer. A request from outside Cloudflare can send any `CF-Connecting-IP` it likes, and the gem ignores it. A Cloudflare edge overwrites the header with the address that connected to it, so a visitor cannot choose the value that arrives from an edge.
+
+A Cloudflare Worker's `fetch()` is the exception. When it fetches a hostname that is not proxied through Cloudflare, the Worker writes `CF-Connecting-IP` itself. Cloudflare adds a `CF-Worker` header to every Worker `fetch()`, so the gem ignores `CF-Connecting-IP` on any request that has one. [Worker fetches](#worker-fetches-are-counted-by-the-edge-address) explains the attack and what it costs you.
 
 `RemoteIp` must already resolve the peer to the Cloudflare edge. With kamal-proxy and Thruster in front of Puma, the defaults do that. kamal-proxy terminates TLS and writes the edge into `X-Forwarded-For`, and `RemoteIp` skips the private addresses of kamal-proxy and Thruster. Do not add Cloudflare's ranges to `config.action_dispatch.trusted_proxies`. The next section explains why.
 
@@ -44,7 +47,7 @@ The usual Rails answer is to add Cloudflare's ranges to `config.action_dispatch.
 
 A Cloudflare Worker on any Cloudflare account sends its outbound requests from `2a06:98c0:3600::103`, which is inside Cloudflare's published `2a06:98c0::/29`. The Worker writes whatever `X-Forwarded-For` it likes. Because the Worker's address is a trusted proxy, `RemoteIp` skips it and believes the forged address behind it. Anyone with a free Cloudflare account can then pick the address your rate limits count.
 
-`CF-Connecting-IP` does not have that hole. On a request from a Worker in another zone, Cloudflare sets the header to the Worker's own address, `2a06:98c0:3600::103`, and the Worker cannot change it. The kamal-proxy setup above also drops any `X-Forwarded-For` the client sent, so the design needs no `forward_headers` change in `deploy.yml`.
+`CF-Connecting-IP` has that hole in one case only. When a Worker fetches a hostname that is not proxied through Cloudflare, the Worker writes the header, and the gem closes that case by checking `CF-Worker`. When a Worker in another zone fetches your proxied hostname, Cloudflare sets the header to `2a06:98c0:3600::103`, and the Worker cannot change it. The kamal-proxy setup above also drops any `X-Forwarded-For` the client sent, so the design needs no `forward_headers` change in `deploy.yml`.
 
 ## Rate-limit by the visitor's network
 
@@ -142,8 +145,20 @@ Until an app deploys the new tag, it keeps the old ranges. A visitor who arrives
 ## What the gem does not protect against
 
 - **Other Cloudflare zones.** The middleware believes any Cloudflare edge, not only your zone's edges. A Cloudflare Enterprise customer can point a zone at your origin, override Host and SNI, and choose the `CF-Connecting-IP` your app sees. A shared-secret header set by a Cloudflare Transform Rule, checked by the app, would close this. The gem does not do that.
-- **Workers share one address.** Requests from Workers on other Cloudflare accounts all arrive with `CF-Connecting-IP: 2a06:98c0:3600::103`. Your rate limits count all of them as one visitor.
-- **Emergency DNS bypass.** If you take your DNS records off Cloudflare's proxy, a Worker that fetches your site can connect straight to the origin from a Cloudflare address and set `CF-Connecting-IP` itself. Until the records go back behind Cloudflare, per-IP limits can be dodged that way.
+- **Hostnames your origin does not serve.** A Worker can reach your origin under a hostname you do not control, as the next section describes. The gem's `CF-Worker` check stops that Worker from choosing your app's `remote_ip`, but your app still answers the request. Make the origin refuse any Host and TLS SNI it does not serve. kamal-proxy does that when `proxy.hosts` lists your hostnames and `proxy.ssl` is `true`. [Authenticated Origin Pulls](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/) with your own certificate is stronger, because the origin then accepts TLS only from your zone.
+
+### Worker fetches are counted by the edge address
+
+Cloudflare's [HTTP request headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/) page says that on a Worker subrequest to a hostname outside Cloudflare, "the Worker script controls the client IP headers". That gives an attacker this path to your app:
+
+1. The attacker points a DNS-only hostname they own at your origin's IP address.
+2. A Worker on the attacker's free Cloudflare account fetches that hostname and sets `CF-Connecting-IP` to any address.
+3. The request leaves Cloudflare from an address inside Cloudflare's ranges, so the peer check passes.
+
+The same page says `CF-Worker` "is added to all Worker subrequests sent via `fetch()`" and names the zone that owns the Worker. The middleware therefore keeps the edge address as `request.remote_ip` whenever `CF-Worker` is present. That has two costs:
+
+- Requests from your own Workers are also counted by the edge address, not by the visitor the Worker acts for. All Worker traffic that reaches your origin through one edge address shares one rate-limit count. That includes Workers in other zones, whose requests through your proxied hostname carry `CF-Connecting-IP: 2a06:98c0:3600::103`.
+- Cloudflare does not document whether it removes a `CF-Worker` header that a visitor sends. If it does not, a visitor can add one and be counted by the edge address instead of their own.
 
 ## Develop the gem
 
