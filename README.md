@@ -23,7 +23,7 @@ Run `bundle install`. Bundler requires the gem for you, and the gem's Railtie ad
 
 - The peer is inside one of Cloudflare's ranges in `data/ips-v4.txt` or `data/ips-v6.txt`.
 - The request has no `CF-Worker` header.
-- The header names exactly one address. A /32 or /128 counts as one address.
+- The header names exactly one address. A /32 or /128 counts as one address. An IPv4-mapped IPv6 address, such as `::ffff:203.0.113.7`, becomes its IPv4 address.
 
 In every other case `request.remote_ip` stays the peer. A request from outside Cloudflare can send any `CF-Connecting-IP` it likes, and the gem ignores it. A Cloudflare edge overwrites the header with the address that connected to it, so a visitor cannot choose the value that arrives from an edge.
 
@@ -58,6 +58,7 @@ A Cloudflare Worker on any Cloudflare account sends its outbound requests from `
 | `request.remote_ip` | `request.remote_network` |
 |---|---|
 | `203.0.113.7` | `203.0.113.7/32` |
+| `::ffff:203.0.113.7` | `203.0.113.7/32` |
 | `2001:db8:1:2::7` | `2001:db8:1:2::/64` |
 | `2001:db8:1:2:ffff::1` | `2001:db8:1:2::/64` |
 

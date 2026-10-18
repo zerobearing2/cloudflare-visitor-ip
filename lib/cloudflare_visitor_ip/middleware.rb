@@ -25,7 +25,7 @@ module CloudflareVisitorIp
       end
 
       def single_address(value)
-        address = IPAddr.new(value.to_s)
+        address = IPAddr.new(value.to_s).native
         address.to_s if address.prefix == (address.ipv4? ? 32 : 128)
       rescue IPAddr::Error
         nil

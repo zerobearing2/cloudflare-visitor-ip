@@ -21,6 +21,14 @@ class VisitorAddressTest < ActiveSupport::TestCase
     assert_equal VISITOR_V6, remote_ip(from: CLOUDFLARE_EDGE_V6, connecting_ip: VISITOR_V6)
   end
 
+  test "a visitor behind a Cloudflare edge written as IPv4-mapped IPv6 is known by their own address" do
+    assert_equal VISITOR, remote_ip(from: "::ffff:#{CLOUDFLARE_EDGE}", connecting_ip: VISITOR)
+  end
+
+  test "an IPv4 visitor that CF-Connecting-IP writes as IPv4-mapped IPv6 is known by their IPv4 address" do
+    assert_equal VISITOR, remote_ip(from: CLOUDFLARE_EDGE, connecting_ip: "::ffff:#{VISITOR}")
+  end
+
   test "a Cloudflare edge that names no single address keeps the edge address" do
     [ nil, "", "unknown", "203.0.113.0/24", "2001:db8::/64", "#{VISITOR}, #{NEIGHBOR}" ].each do |connecting_ip|
       assert_equal CLOUDFLARE_EDGE, remote_ip(from: CLOUDFLARE_EDGE, connecting_ip: connecting_ip), "CF-Connecting-IP: #{connecting_ip.inspect}"
@@ -38,6 +46,10 @@ class VisitorAddressTest < ActiveSupport::TestCase
 
   test "remote_network is an IPv4 visitor's own address as a /32" do
     assert_equal "#{VISITOR}/32", RailsApp.visit(from: CLOUDFLARE_EDGE, connecting_ip: VISITOR)["remote_network"]
+  end
+
+  test "remote_network is the /32 of an IPv4 peer written as IPv4-mapped IPv6" do
+    assert_equal "#{OUTSIDER}/32", RailsApp.visit(from: "::ffff:#{OUTSIDER}", connecting_ip: nil)["remote_network"]
   end
 
   test "remote_network is an IPv6 visitor's /64 by default, so rotating within it keeps one network" do

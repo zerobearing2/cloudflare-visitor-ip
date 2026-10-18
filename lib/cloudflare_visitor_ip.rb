@@ -27,7 +27,7 @@ module CloudflareVisitorIp
   end
 
   def self.include?(address)
-    ip = IPAddr.new(address.to_s)
+    ip = IPAddr.new(address.to_s).native
     RANGES.any? { |range| range.include?(ip) }
   rescue IPAddr::Error
     false
