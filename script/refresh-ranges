@@ -11,6 +11,11 @@ class RangesRefresh
   FAMILIES = { "ipv4" => "data/ips-v4.txt", "ipv6" => "data/ips-v6.txt" }.freeze
   VERSION_FILE = "lib/cloudflare_visitor_ip/version.rb"
   VERSION = /VERSION = "(\d+)\.(\d+)\.(\d+)"/
+  SHORTEST_PREFIX = { "ipv4" => 12, "ipv6" => 20 }.freeze
+  NOT_PUBLIC = %w[
+    0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16
+    ::/128 ::1/128 ::ffff:0:0/96 fe80::/10 fc00::/7
+  ].map { |cidr| IPAddr.new(cidr) }.freeze
 
   def initialize(root:, today: Date.today)
     @root = root
@@ -26,14 +31,15 @@ class RangesRefresh
     end
   end
 
-  # Returns the new version, or nil when the published ranges match the data files.
   def apply(body)
     published = parse(body)
     current = FAMILIES.transform_values { |path| read(path).lines(chomp: true) }
     check_shrinkage(published, current)
-    if published.any? { |family, cidrs| cidrs.sort != current[family].sort }
-      release(published, current)
-    end
+    return nil if published.all? { |family, cidrs| cidrs.sort == current[family].sort }
+
+    version = next_version
+    release(version, published, current)
+    version
   end
 
   private
@@ -58,8 +64,16 @@ class RangesRefresh
       range = IPAddr.new(entry)
       raise Refused, "#{entry} in #{family}_cidrs is not #{family}" unless range.public_send("#{family}?")
       raise Refused, "#{entry} in #{family}_cidrs has host bits set" unless range == IPAddr.new(address)
+      check_public(family, entry, range)
     rescue IPAddr::Error
       raise Refused, "#{entry.inspect} in #{family}_cidrs is not a CIDR"
+    end
+
+    def check_public(family, entry, range)
+      raise Refused, "#{entry} in #{family}_cidrs is wider than /#{SHORTEST_PREFIX[family]}" if range.prefix < SHORTEST_PREFIX[family]
+      if not_public = NOT_PUBLIC.find { |block| block.include?(range) || range.include?(block) }
+        raise Refused, "#{entry} in #{family}_cidrs overlaps #{not_public}/#{not_public.prefix}, which is not a public range"
+      end
     end
 
     def check_shrinkage(published, current)
@@ -70,15 +84,13 @@ class RangesRefresh
       end
     end
 
-    def release(published, current)
-      version = next_version
+    def release(version, published, current)
       version_file = read(VERSION_FILE).sub(VERSION, %(VERSION = "#{version}"))
       changelog = read("CHANGELOG.md").sub(/^## /) { changelog_entry(version, published, current) + "## " }
 
       published.each { |family, cidrs| write(FAMILIES[family], cidrs.join("\n") + "\n") }
       write(VERSION_FILE, version_file)
       write("CHANGELOG.md", changelog)
-      version
     end
 
     def next_version

@@ -132,6 +132,8 @@ Firewalls read these files, so the script refuses to write anything, and exits w
 - The response is not JSON, or `success` is not `true`.
 - Either family is missing or empty.
 - Any entry is not a CIDR string, is the other family, or has host bits set, such as `192.0.2.1/24`.
+- Any IPv4 entry is wider than /12, or any IPv6 entry is wider than /20.
+- Any entry overlaps a range that is not public: `0.0.0.0/8`, a private, loopback, or link-local range of either family, the IPv6 unspecified address `::`, or the IPv4-mapped block `::ffff:0:0/96`.
 - Either family has fewer than half the ranges in its data file.
 
 To run it by hand, run `script/refresh-ranges` from the repository root. It needs only Ruby's standard library.
