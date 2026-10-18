@@ -169,7 +169,7 @@ Cloudflare's [HTTP request headers](https://developers.cloudflare.com/fundamenta
 The same page says `CF-Worker` "is added to all Worker subrequests sent via `fetch()`" and names the zone that owns the Worker. The middleware therefore keeps the edge address as `request.remote_ip` whenever `CF-Worker` is present. That has two costs:
 
 - Requests from your own Workers are also counted by the edge address, not by the visitor the Worker acts for. All Worker traffic that reaches your origin through one edge address shares one rate-limit count. That includes Workers in other zones, whose requests through your proxied hostname carry `CF-Connecting-IP: 2a06:98c0:3600::103`.
-- Cloudflare does not document whether it removes a `CF-Worker` header that a visitor sends. If it does not, a visitor who adds one is known by the edge address. Their own address then stays out of your request log. Cloudflare reaches your origin from many edge addresses, so their requests also spread over several rate-limit counts instead of one. To close this, add a Request Header Transform Rule on your zone that removes `CF-Worker`. Cloudflare applies those rules before it adds `CF-Worker` to a Worker's fetch, so real Worker fetches still carry it.
+- A visitor cannot use `CF-Worker` to hide behind the edge address. Cloudflare does not document this, so it was tested on 2026-10-18: a request through a proxied hostname with `CF-Worker: probe.example` reached the origin without the header, and the app logged the visitor's own address.
 
 ## Develop the gem
 
