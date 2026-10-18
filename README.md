@@ -31,7 +31,7 @@ A Cloudflare Worker's `fetch()` is the exception. When it fetches a hostname tha
 
 `RemoteIp` must already resolve the peer to the Cloudflare edge. With kamal-proxy and Thruster in front of Puma, the defaults do that. kamal-proxy terminates TLS and writes the edge into `X-Forwarded-For`, and `RemoteIp` skips the private addresses of kamal-proxy and Thruster. Do not add Cloudflare's ranges to `config.action_dispatch.trusted_proxies`. The next section explains why.
 
-To turn the middleware off, set this in `config/application.rb`:
+To turn the middleware off, set this in `config/application.rb` or in a file in `config/initializers`:
 
 ```ruby
 config.cloudflare_visitor_ip.middleware = false
@@ -73,7 +73,7 @@ end
 
 ### Choose the IPv6 prefix
 
-Some ISPs give each customer a /56 or a /48, which holds 256 or 65,536 /64s. One customer can then spread requests over many /64 networks. To count a wider network, set the prefix in `config/application.rb`:
+Some ISPs give each customer a /56 or a /48, which holds 256 or 65,536 /64s. One customer can then spread requests over many /64 networks. To count a wider network, set the prefix in `config/application.rb` or in a file in `config/initializers`:
 
 ```ruby
 config.cloudflare_visitor_ip.ipv6_prefix = 56

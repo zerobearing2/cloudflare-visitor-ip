@@ -1,6 +1,7 @@
 require "test_helper"
 require "fixtures/rails_app"
 require "open3"
+require "tmpdir"
 
 RailsApp.boot
 
@@ -55,6 +56,22 @@ class VisitorAddressTest < ActiveSupport::TestCase
     assert_equal "2001:db8:0:1::7", visits.first["remote_ip"]
   end
 
+  test "an app that sets the gem's config in config/initializers gets those settings" do
+    visits = visit_app_with_initializer(<<~RUBY, from: CLOUDFLARE_EDGE_V6, connecting_ips: [ VISITOR_V6 ])
+      Rails.application.config.cloudflare_visitor_ip.ipv6_prefix = 48
+      Rails.application.config.cloudflare_visitor_ip.middleware = false
+    RUBY
+
+    assert_equal CLOUDFLARE_EDGE_V6, visits.sole["remote_ip"]
+    assert_equal "2606:4700::/48", visits.sole["remote_network"]
+  end
+
+  test "an app that sets CloudflareVisitorIp.ipv6_prefix in config/initializers keeps that prefix" do
+    visits = visit_app_with_initializer("CloudflareVisitorIp.ipv6_prefix = 48", from: CLOUDFLARE_EDGE_V6, connecting_ips: [ VISITOR_V6 ])
+
+    assert_equal "2001:db8::/48", visits.sole["remote_network"]
+  end
+
   test "an app with an ipv6_prefix outside 1 to 128 fails to boot" do
     [ "0", "129", '"56"' ].each do |prefix|
       _stdout, stderr, status = run_app("RailsApp.config.cloudflare_visitor_ip.ipv6_prefix = #{prefix}")
@@ -98,6 +115,13 @@ class VisitorAddressTest < ActiveSupport::TestCase
 
       assert status.success?, stderr
       JSON.parse(stdout)
+    end
+
+    def visit_app_with_initializer(source, from:, connecting_ips:)
+      Dir.mktmpdir do |initializers|
+        File.write(File.join(initializers, "cloudflare_visitor_ip.rb"), source)
+        visit_booted_app(%(RailsApp.paths["config/initializers"] = #{initializers.inspect}), from: from, connecting_ips: connecting_ips)
+      end
     end
 
     # An app boots once per process, so each configuration gets its own.
