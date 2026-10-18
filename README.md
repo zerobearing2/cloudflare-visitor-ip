@@ -84,6 +84,14 @@ config.cloudflare_visitor_ip.ipv6_prefix = 56
 
 The value must be an Integer from 1 to 128. Any other value raises `ArgumentError` when the app boots. Outside Rails, read and set the same value with `CloudflareVisitorIp.ipv6_prefix`.
 
+### Keep Pseudo IPv4 off Overwrite Headers
+
+Cloudflare's **Pseudo IPv4** setting, on the zone's **Network** page, has three values: **Off**, **Add Header**, and **Overwrite Headers**. Cloudflare's [Pseudo IPv4](https://developers.cloudflare.com/network/pseudo-ipv4/) page says that with **Overwrite Headers**, Cloudflare "overwrites the existing `Cf-Connecting-IP` and `X-Forwarded-For` headers with a pseudo IPv4 address while preserving the real IPv6 address in `CF-Connecting-IPv6` header." The pseudo address is a Class E address that Cloudflare hashes from the visitor's IPv6 address. `request.remote_ip` is then that pseudo address, and `request.remote_network` is its /32. Each IPv6 address hashes to its own pseudo address, so a visitor who rotates through a /64 gets a new rate-limit key with each address.
+
+Keep the setting at **Off**, the default, or **Add Header**. With **Add Header**, Cloudflare adds a `Cf-Pseudo-IPv4` header, and the page describes no change to `CF-Connecting-IP`.
+
+The gem does not read `CF-Connecting-IPv6`. Cloudflare does not document whether an edge removes a `CF-Connecting-IPv6` header that a visitor sends when the setting is not **Overwrite Headers**. If it does not, a visitor could choose that value.
+
 ## Restrict your firewall to Cloudflare
 
 The gem's ranges are the list your firewall should admit on ports 80 and 443. `cloudflare-ips` prints them one CIDR per line and loads nothing from Rails:
